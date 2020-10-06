@@ -18,7 +18,8 @@ let binPathCache: { [bin: string]: string } = {};
 
 export const envPath = process.env['PATH'] || (process.platform === 'win32' ? process.env['Path'] : null);
 
-export function getBinPathFromEnvVar(toolName: string, envVarValue: string, appendBinToPath: boolean): string {
+// find the tool's path from the given PATH env var, or null if the tool is not found.
+export function getBinPathFromEnvVar(toolName: string, envVarValue: string, appendBinToPath: boolean): string|null {
 	toolName = correctBinname(toolName);
 	if (envVarValue) {
 		const paths = envVarValue.split(path.delimiter);
@@ -37,23 +38,38 @@ export function getBinPathWithPreferredGopathGoroot(
 	preferredGopaths: string[],
 	preferredGoroot?: string,
 	alternateTool?: string,
-	useCache = true,
+	useCache = true
 ): string {
+	const r = getBinPathWithPreferredGopathGorootWithExplanation(
+		toolName, preferredGopaths, preferredGoroot, alternateTool, useCache);
+	return r.binPath;
+}
+
+// Is same as getBinPathWithPreferredGopathGoroot, but returns why the
+// returned path was chosen.
+export function getBinPathWithPreferredGopathGorootWithExplanation(
+	toolName: string,
+	preferredGopaths: string[],
+	preferredGoroot?: string,
+	alternateTool?: string,
+	useCache = true,
+): {binPath: string, why?: string} {
 	if (alternateTool && path.isAbsolute(alternateTool) && executableFileExists(alternateTool)) {
 		binPathCache[toolName] = alternateTool;
-		return alternateTool;
+		return {binPath: alternateTool, why: 'alternateTool'};
 	}
 
 	// FIXIT: this cache needs to be invalidated when go.goroot or go.alternateTool is changed.
 	if (useCache && binPathCache[toolName]) {
-		return binPathCache[toolName];
+		return {binPath: binPathCache[toolName], why: 'cached'};
 	}
 
 	const binname = alternateTool && !path.isAbsolute(alternateTool) ? alternateTool : toolName;
+	const found = (why: string) => binname === toolName ? why : 'alternateTool';
 	const pathFromGoBin = getBinPathFromEnvVar(binname, process.env['GOBIN'], false);
 	if (pathFromGoBin) {
 		binPathCache[toolName] = pathFromGoBin;
-		return pathFromGoBin;
+		return {binPath: pathFromGoBin, why: binname === toolName ? 'gobin' : 'alternateTool'};
 	}
 
 	for (const preferred of preferredGopaths) {
@@ -62,7 +78,7 @@ export function getBinPathWithPreferredGopathGoroot(
 			const pathFrompreferredGoPath = getBinPathFromEnvVar(binname, preferred, true);
 			if (pathFrompreferredGoPath) {
 				binPathCache[toolName] = pathFrompreferredGoPath;
-				return pathFrompreferredGoPath;
+				return {binPath: pathFrompreferredGoPath, why: found('gopath')};
 			}
 		}
 	}
@@ -71,14 +87,14 @@ export function getBinPathWithPreferredGopathGoroot(
 	const pathFromGoRoot = getBinPathFromEnvVar(binname, preferredGoroot || getCurrentGoRoot(), true);
 	if (pathFromGoRoot) {
 		binPathCache[toolName] = pathFromGoRoot;
-		return pathFromGoRoot;
+		return {binPath: pathFromGoRoot, why: found('goroot')};
 	}
 
 	// Finally search PATH parts
 	const pathFromPath = getBinPathFromEnvVar(binname, envPath, false);
 	if (pathFromPath) {
 		binPathCache[toolName] = pathFromPath;
-		return pathFromPath;
+		return {binPath: pathFromPath, why: found('path')};
 	}
 
 	// Check default path for go
@@ -86,13 +102,13 @@ export function getBinPathWithPreferredGopathGoroot(
 		const defaultPathForGo = process.platform === 'win32' ? 'C:\\Go\\bin\\go.exe' : '/usr/local/go/bin/go';
 		if (executableFileExists(defaultPathForGo)) {
 			binPathCache[toolName] = defaultPathForGo;
-			return defaultPathForGo;
+			return {binPath: defaultPathForGo, why: 'default'};
 		}
-		return;
+		return {binPath: ''};
 	}
 
 	// Else return the binary name directly (this will likely always fail downstream)
-	return toolName;
+	return {binPath: toolName};
 }
 
 /**
@@ -156,37 +172,6 @@ export function resolveHomeDir(inputPath: string): string {
 		return inputPath;
 	}
 	return inputPath.startsWith('~') ? path.join(os.homedir(), inputPath.substr(1)) : inputPath;
-}
-
-export function stripBOM(s: string): string {
-	if (s && s[0] === '\uFEFF') {
-		s = s.substr(1);
-	}
-	return s;
-}
-
-export function parseEnvFile(envFilePath: string): { [key: string]: string } {
-	const env: { [key: string]: any } = {};
-	if (!envFilePath) {
-		return env;
-	}
-
-	try {
-		const buffer = stripBOM(fs.readFileSync(envFilePath, 'utf8'));
-		buffer.split('\n').forEach((line) => {
-			const r = line.match(/^\s*([\w\.\-]+)\s*=\s*(.*)?\s*$/);
-			if (r !== null) {
-				let value = r[2] || '';
-				if (value.length > 0 && value.charAt(0) === '"' && value.charAt(value.length - 1) === '"') {
-					value = value.replace(/\\n/gm, '\n');
-				}
-				env[r[1]] = value.replace(/(^['"]|['"]$)/g, '');
-			}
-		});
-		return env;
-	} catch (e) {
-		throw new Error(`Cannot load environment variables from file ${envFilePath}`);
-	}
 }
 
 // Walks up given folder path to return the closest ancestor that has `src` as a child
@@ -257,4 +242,20 @@ export function getToolFromToolPath(toolPath: string): string | undefined {
 		tool = tool.substr(0, tool.length - 4);
 	}
 	return tool;
+}
+
+/**
+ * Returns output with relative filepaths expanded using the provided directory
+ * @param output
+ * @param cwd
+ */
+export function expandFilePathInOutput(output: string, cwd: string): string {
+	const lines = output.split('\n');
+	for (let i = 0; i < lines.length; i++) {
+		const matches = lines[i].match(/\s*(\S+\.go):(\d+):/);
+		if (matches && matches[1] && !path.isAbsolute(matches[1])) {
+			lines[i] = lines[i].replace(matches[1], path.join(cwd, matches[1]));
+		}
+	}
+	return lines.join('\n');
 }

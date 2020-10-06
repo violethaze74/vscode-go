@@ -11,8 +11,8 @@ import path = require('path');
 import { SemVer } from 'semver';
 import util = require('util');
 import vscode = require('vscode');
-import { toolInstallationEnvironment } from './goEnv';
-import { addGoRuntimeBaseToPATH, initGoStatusBar } from './goEnvironmentStatus';
+import { toolExecutionEnvironment, toolInstallationEnvironment } from './goEnv';
+import { addGoRuntimeBaseToPATH, clearGoRuntimeBaseFromPATH, initGoStatusBar } from './goEnvironmentStatus';
 import { getLanguageServerToolPath } from './goLanguageServer';
 import { restartLanguageServer } from './goMain';
 import { hideGoStatus, outputChannel, showGoStatus } from './goStatus';
@@ -27,15 +27,18 @@ import {
 	Tool,
 	ToolAtVersion,
 } from './goTools';
+import { getFromWorkspaceState } from './stateUtils';
 import {
 	getBinPath,
+	getBinPathWithExplanation,
 	getGoConfig,
 	getGoVersion,
 	getTempFilePath,
+	getWorkspaceFolderPath,
 	GoVersion,
 	rmdirRecursive,
 } from './util';
-import { envPath, getCurrentGoRoot, getToolFromToolPath, setCurrentGoRoot } from './utils/goPath';
+import { envPath, getCurrentGoRoot, getToolFromToolPath, setCurrentGoRoot } from './utils/pathUtils';
 
 // declinedUpdates tracks the tools that the user has declined to update.
 const declinedUpdates: Tool[] = [];
@@ -217,6 +220,8 @@ export async function installTool(
 	}
 	args.push(importPath);
 
+	const toolImportPath = tool.version ? importPath + '@' + tool.version : importPath;
+
 	let output: string;
 	let result: string = '';
 	try {
@@ -240,12 +245,11 @@ export async function installTool(
 			const outputFile = path.join(destDir, 'bin', process.platform === 'win32' ? `${tool.name}.exe` : tool.name);
 			await execFile(goVersion.binaryPath, ['build', '-o', outputFile, importPath], opts);
 		}
-		const toolImportPath = tool.version ? importPath + '@' + tool.version : importPath;
 		const toolInstallPath = getBinPath(tool.name);
 		outputChannel.appendLine(`Installing ${toolImportPath} (${toolInstallPath}) SUCCEEDED`);
 	} catch (e) {
-		outputChannel.appendLine(`Installing ${importPath} FAILED`);
-		result = `failed to install ${tool}: ${e} ${output} `;
+		outputChannel.appendLine(`Installing ${toolImportPath} FAILED`);
+		result = `failed to install ${tool.name}(${toolImportPath}): ${e} ${output} `;
 	}
 
 	// Delete the temporary installation directory.
@@ -340,44 +344,60 @@ export async function promptForUpdatingTool(toolName: string, newVersion?: SemVe
 }
 
 export function updateGoVarsFromConfig(): Promise<void> {
-	// FIXIT: if updateGoVarsFromConfig is called again after addGoRuntimeBaseToPATH sets PATH,
-	// the go chosen by getBinPath based on PATH will not change.
-	const goRuntimePath = getBinPath('go', false);
-	if (!goRuntimePath) {
+	const {binPath, why} = getBinPathWithExplanation('go', false);
+	const goRuntimePath = binPath;
+
+	if (!goRuntimePath || !path.isAbsolute(goRuntimePath)) {
+		// getBinPath returns the absolute path to the tool if it exists.
+		// Otherwise, it may return the tool name (e.g. 'go').
 		suggestDownloadGo();
-		return;
+		return Promise.reject();
 	}
 
 	return new Promise<void>((resolve, reject) => {
-		cp.execFile(goRuntimePath, ['env', 'GOPATH', 'GOROOT', 'GOPROXY', 'GOBIN', 'GOMODCACHE'], (err, stdout, stderr) => {
-			if (err) {
-				return reject();
-			}
-			const envOutput = stdout.split('\n');
-			if (!process.env['GOPATH'] && envOutput[0].trim()) {
-				process.env['GOPATH'] = envOutput[0].trim();
-			}
-			if (envOutput[1] && envOutput[1].trim()) {
-				setCurrentGoRoot(envOutput[1].trim());
-			}
-			if (!process.env['GOPROXY'] && envOutput[2] && envOutput[2].trim()) {
-				process.env['GOPROXY'] = envOutput[2].trim();
-			}
-			if (!process.env['GOBIN'] && envOutput[3] && envOutput[3].trim()) {
-				process.env['GOBIN'] = envOutput[3].trim();
-			}
-			if (!process.env['GOMODCACHE'] && envOutput[4] && envOutput[4].trim()) {
-				process.env['GOMODCACHE'] = envOutput[4].trim();
-			}
+		cp.execFile(goRuntimePath,
+			['env', 'GOPATH', 'GOROOT', 'GOPROXY', 'GOBIN', 'GOMODCACHE'],
+			{ env: toolExecutionEnvironment(), cwd: getWorkspaceFolderPath() },
+			(err, stdout, stderr) => {
+				if (err || stderr) {
+					outputChannel.append(`Failed to run '${goRuntimePath} env: ${err}\n${stderr}`);
+					outputChannel.show();
 
-			// cgo, gopls, and other underlying tools will inherit the environment and attempt
-			// to locate 'go' from the PATH env var.
-			addGoRuntimeBaseToPATH(path.join(getCurrentGoRoot(), 'bin'));
-			initGoStatusBar();
-			// TODO: restart language server or synchronize with language server update.
+					vscode.window.showErrorMessage(`Failed to run '${goRuntimePath} env. The config change may not be applied correctly.`);
+					return reject();
+				}
+				const envOutput = stdout.split('\n');
+				if (!process.env['GOPATH'] && envOutput[0].trim()) {
+					process.env['GOPATH'] = envOutput[0].trim();
+				}
+				if (envOutput[1] && envOutput[1].trim()) {
+					setCurrentGoRoot(envOutput[1].trim());
+				}
+				if (!process.env['GOPROXY'] && envOutput[2] && envOutput[2].trim()) {
+					process.env['GOPROXY'] = envOutput[2].trim();
+				}
+				if (!process.env['GOBIN'] && envOutput[3] && envOutput[3].trim()) {
+					process.env['GOBIN'] = envOutput[3].trim();
+				}
+				if (!process.env['GOMODCACHE'] && envOutput[4] && envOutput[4].trim()) {
+					process.env['GOMODCACHE'] = envOutput[4].trim();
+				}
 
-			return resolve();
-		});
+				// cgo, gopls, and other underlying tools will inherit the environment and attempt
+				// to locate 'go' from the PATH env var.
+				// Update the PATH only if users configured to use a different
+				// version of go than the system default found from PATH (or Path).
+				if (why !== 'path') {
+					addGoRuntimeBaseToPATH(path.join(getCurrentGoRoot(), 'bin'));
+				} else {
+					// clear pre-existing terminal PATH mutation logic set up by this extension.
+					clearGoRuntimeBaseFromPATH();
+				}
+				initGoStatusBar();
+				// TODO: restart language server or synchronize with language server update.
+
+				return resolve();
+			});
 	});
 }
 
@@ -473,7 +493,7 @@ async function suggestDownloadGo() {
 	}
 
 	const choice = await vscode.window.showErrorMessage(
-		`Failed to find the "go" binary in either GOROOT(${getCurrentGoRoot()}) or PATH(${envPath}. ` +
+		`Failed to find the "go" binary in either GOROOT(${getCurrentGoRoot()}) or PATH(${envPath}). ` +
 		`Check PATH, or Install Go and reload the window.`,
 		'Go to Download Page'
 	);

@@ -1,7 +1,7 @@
 {
   "name": "go",
   "displayName": "Go",
-  "version": "0.17.2",
+  "version": "0.18.0",
   "publisher": "golang",
   "description": "Rich Go language support for Visual Studio Code",
   "author": {
@@ -54,8 +54,10 @@
     "semver": "^7.3.2",
     "tree-kill": "file:third_party/tree-kill",
     "vscode-debugadapter": "^1.40.0",
+    "vscode-debugadapter-testsupport": "^1.42.0",
     "vscode-debugprotocol": "^1.40.0",
-    "vscode-languageclient": "^6.1.3",
+    "vscode-languageclient": "^7.0.0-next.9",
+    "vscode-languageserver-protocol": "^3.16.0-next.7",
     "web-request": "^1.0.7"
   },
   "devDependencies": {
@@ -109,7 +111,8 @@
       {
         "id": "go.mod",
         "extensions": [
-          "go.mod"
+          "go.mod",
+          "gopls.mod"
         ],
         "aliases": [
           "Go Module File"
@@ -240,6 +243,11 @@
         "description": "Generates method stub for implementing the provided interface and inserts at the cursor."
       },
       {
+        "command": "go.toggle.gc_details",
+        "title": "Go: Toggle gc details",
+        "description": "Toggle the display of compiler optimization choices"
+      },
+      {
         "command": "go.import.add",
         "title": "Go: Add Import",
         "description": "Add an import declaration"
@@ -358,6 +366,16 @@
         "command": "go.environment.choose",
         "title": "Go: Choose Go Environment",
         "description": "Choose a different Go version or binary for this project. (WIP)"
+      },
+      {
+        "command": "go.survey.showConfig",
+        "title": "Go: Show Survey Configuration",
+        "description": "Show the current Go survey configuration"
+      },
+      {
+        "command": "go.survey.resetConfig",
+        "title": "Go: Reset Survey Configuration",
+        "description": "Reset the current Go survey configuration history"
       }
     ],
     "breakpoints": [
@@ -1562,6 +1580,18 @@
           ],
           "default": "off",
           "description": "Trace the communication between VS Code and the Go language server."
+        },
+        "go.logging.level": {
+          "type": "string",
+          "default": "error",
+          "enum": [
+            "off",
+            "error",
+            "info",
+            "verbose"
+          ],
+          "description": "The logging level the extension logs at, defaults to 'error'",
+          "scope": "machine-overridable"
         },
         "go.useGoProxyToCheckForToolUpdates": {
           "type": "boolean",

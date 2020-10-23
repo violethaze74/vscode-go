@@ -91,6 +91,10 @@ Generates unit tests for the selected function in the current file
 
 Generates method stub for implementing the provided interface and inserts at the cursor.
 
+### `Go: Toggle gc details`
+
+Toggle the display of compiler optimization choices
+
 ### `Go: Add Import`
 
 Add an import declaration
@@ -186,3 +190,11 @@ Restart the running instance of the language server
 ### `Go: Choose Go Environment`
 
 Choose a different Go version or binary for this project. (WIP)
+
+### `Go: Show Survey Configuration`
+
+Show the current Go survey configuration
+
+### `Go: Reset Survey Configuration`
+
+Reset the current Go survey configuration history

@@ -91,6 +91,10 @@ Generates unit tests for the selected function in the current file
 
 Generates method stub for implementing the provided interface and inserts at the cursor.
 
+### `Go: Extract Language Server Logs To Editor`
+
+Extract logs in the `gopls (server)` output channel to the editor.
+
 ### `Go: Toggle gc details`
 
 Toggle the display of compiler optimization choices

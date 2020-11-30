@@ -11,13 +11,94 @@ import os = require('os');
 import path = require('path');
 import sinon = require('sinon');
 import vscode = require('vscode');
-import { getTestFlags, goTest } from '../../src/testUtils';
-import { rmdirRecursive } from '../../src/util';
+import { computeTestCommand, getTestFlags, goTest } from '../../src/testUtils';
+import { getGoConfig, rmdirRecursive } from '../../src/util';
+
+suite('Test Go Test Args', () => {
+	function runTest(param: {
+		expectedArgs: string,
+		expectedOutArgs: string,
+		flags?: string[],
+		functions?: string[],
+		isBenchmark?: boolean
+		}) {
+
+		const {args, outArgs} = computeTestCommand({
+			dir: '',
+			goConfig: getGoConfig(),
+			flags: param.flags || [],
+			functions: param.functions || [],
+			isBenchmark: param.isBenchmark || false,
+			applyCodeCoverage: false,
+		}, ['./...']);
+
+		assert.strictEqual(args.join(' '), param.expectedArgs, 'actual command');
+		assert.strictEqual(outArgs.join(' '), param.expectedOutArgs, 'displayed command');
+	}
+
+	test('default config', () => {
+		runTest({
+			expectedArgs: 'test -timeout 30s ./...',
+			expectedOutArgs: 'test -timeout 30s ./...'
+		});
+	});
+	test('user flag [-v] enables -json flag', () => {
+		runTest({
+			expectedArgs: 'test -timeout 30s -json ./... -v',
+			expectedOutArgs: 'test -timeout 30s ./... -v',
+			flags: ['-v']
+		});
+	});
+	test('user flag [-json -v] prevents -json flag addition', () => {
+		runTest({
+			expectedArgs: 'test -timeout 30s ./... -json -v',
+			expectedOutArgs: 'test -timeout 30s ./... -json -v',
+			flags: ['-json', '-v']
+		});
+	});
+	test('user flag [-args] does not crash', () => {
+		runTest({
+			expectedArgs: 'test -timeout 30s ./... -args',
+			expectedOutArgs: 'test -timeout 30s ./... -args',
+			flags: ['-args']
+		});
+	});
+	test('user flag [-args -v] does not enable -json flag', () => {
+		runTest({
+			expectedArgs: 'test -timeout 30s ./... -args -v',
+			expectedOutArgs: 'test -timeout 30s ./... -args -v',
+			flags: ['-args', '-v']
+		});
+	});
+	test('specifying functions adds -run flags', () => {
+		runTest({
+			expectedArgs: 'test -timeout 30s -run ^(TestA|TestB)$ ./...',
+			expectedOutArgs: 'test -timeout 30s -run ^(TestA|TestB)$ ./...',
+			functions: ['TestA', 'TestB']
+		});
+	});
+	test('functions & benchmark adds -bench flags and skips timeout', () => {
+		runTest({
+			expectedArgs: 'test -benchmem -run=^$ -bench ^(TestA|TestB)$ ./...',
+			expectedOutArgs: 'test -benchmem -run=^$ -bench ^(TestA|TestB)$ ./...',
+			functions: ['TestA', 'TestB'],
+			isBenchmark: true,
+		});
+	});
+	test('user -run flag is ignored when functions are provided', () => {
+		runTest({
+			expectedArgs: 'test -timeout 30s -run ^(TestA|TestB)$ ./...',
+			expectedOutArgs: 'test -timeout 30s -run ^(TestA|TestB)$ ./...',
+			functions: ['TestA', 'TestB'],
+			flags: ['-run', 'TestC']
+		});
+	});
+});
 
 suite('Test Go Test', function () {
 	this.timeout(10000);
 
-	const sourcePath = path.join(__dirname, '..', '..', '..', 'test', 'fixtures', 'goTestTest');
+	const sourcePath = path.join(__dirname, '..', '..', '..', 'test', 'testdata', 'goTestTest');
 
 	let tmpGopath: string;
 	let repoPath: string;
@@ -50,7 +131,7 @@ suite('Test Go Test', function () {
 	}
 
 	async function runTest(
-		input: { isMod: boolean, includeSubDirectories: boolean, testFlags?: string[], applyCodeCoverage?: boolean},
+		input: { isMod: boolean, includeSubDirectories: boolean, testFlags?: string[], applyCodeCoverage?: boolean },
 		wantFiles: string[]) {
 
 		fs.copySync(sourcePath, repoPath, { recursive: true });
@@ -114,8 +195,8 @@ suite('Test Go Test', function () {
 			{ isMod: true, includeSubDirectories: true, testFlags: ['-v'] },
 			[path.join(repoPath, 'a_test.go'), path.join(repoPath, 'b', 'b_test.go')]);
 		await runTest(
-				{ isMod: true, includeSubDirectories: true, testFlags: ['-race'], applyCodeCoverage: true },
-				[path.join(repoPath, 'a_test.go'), path.join(repoPath, 'b', 'b_test.go')]);
+			{ isMod: true, includeSubDirectories: true, testFlags: ['-race'], applyCodeCoverage: true },
+			[path.join(repoPath, 'a_test.go'), path.join(repoPath, 'b', 'b_test.go')]);
 		await runTest(
 			{ isMod: true, includeSubDirectories: false, testFlags: ['-v'] },
 			[path.join(repoPath, 'a_test.go')]);

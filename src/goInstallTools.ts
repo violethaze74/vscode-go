@@ -226,8 +226,6 @@ export async function installTool(
 	}
 	args.push(importPath);
 
-	const toolImportPath = tool.version ? importPath + '@' + tool.version : importPath;
-
 	let output: string;
 	let result: string = '';
 	try {
@@ -242,7 +240,7 @@ export async function installTool(
 
 		// TODO(rstambler): Figure out why this happens and maybe delete it.
 		if (stderr.indexOf('unexpected directory layout:') > -1) {
-			await execFile(goVersion.binaryPath, args, opts);
+			await execFile(goBinary, args, opts);
 		} else if (hasModSuffix(tool)) {
 			const gopath = env['GOPATH'];
 			if (!gopath) {
@@ -250,13 +248,13 @@ export async function installTool(
 			}
 			const destDir = gopath.split(path.delimiter)[0];
 			const outputFile = path.join(destDir, 'bin', process.platform === 'win32' ? `${tool.name}.exe` : tool.name);
-			await execFile(goVersion.binaryPath, ['build', '-o', outputFile, importPath], opts);
+			await execFile(goBinary, ['build', '-o', outputFile, importPath], opts);
 		}
 		const toolInstallPath = getBinPath(tool.name);
-		outputChannel.appendLine(`Installing ${toolImportPath} (${toolInstallPath}) SUCCEEDED`);
+		outputChannel.appendLine(`Installing ${importPath} (${toolInstallPath}) SUCCEEDED`);
 	} catch (e) {
-		outputChannel.appendLine(`Installing ${toolImportPath} FAILED`);
-		result = `failed to install ${tool.name}(${toolImportPath}): ${e} ${output} `;
+		outputChannel.appendLine(`Installing ${importPath} FAILED`);
+		result = `failed to install ${tool.name}(${importPath}): ${e} ${output} `;
 	}
 
 	// Delete the temporary installation directory.
@@ -316,7 +314,7 @@ Run "go get -v ${getImportPath(tool, goVersion)}" to install.`;
 	}
 }
 
-export async function promptForUpdatingTool(toolName: string, newVersion?: SemVer) {
+export async function promptForUpdatingTool(toolName: string, newVersion?: SemVer, crashed?: boolean) {
 	const tool = getTool(toolName);
 	const toolVersion = { ...tool, version: newVersion }; // ToolWithVersion
 
@@ -324,14 +322,20 @@ export async function promptForUpdatingTool(toolName: string, newVersion?: SemVe
 	if (containsTool(declinedUpdates, tool)) {
 		return;
 	}
-	const goVersion = await getGoVersion();
-	let updateMsg = `Your version of ${tool.name} appears to be out of date. Please update for an improved experience.`;
+
+	// Adjust the prompt if it occurred because the tool crashed.
+	let updateMsg: string;
+	if (crashed === true) {
+		updateMsg = `${tool.name} has crashed, but you are using an outdated version. Please update to the latest version of ${tool.name}.`;
+	} else if (newVersion) {
+		updateMsg = `A new version of ${tool.name} (v${newVersion}) is available. Please update for an improved experience.`;
+	} else {
+		updateMsg = `Your version of ${tool.name} appears to be out of date. Please update for an improved experience.`;
+	}
+
 	let choices: string[] = ['Update'];
 	if (toolName === `gopls`) {
 		choices.push('Release Notes');
-	}
-	if (newVersion) {
-		updateMsg = `A new version of ${tool.name} (v${newVersion}) is available. Please update for an improved experience.`;
 	}
 
 	while (choices.length > 0) {
@@ -339,6 +343,7 @@ export async function promptForUpdatingTool(toolName: string, newVersion?: SemVe
 		switch (selected) {
 			case 'Update':
 				choices = [];
+				const goVersion = await getGoVersion();
 				await installTools([toolVersion], goVersion);
 				break;
 			case 'Release Notes':
@@ -467,6 +472,11 @@ export async function offerToInstallTools() {
 		});
 	}
 
+	const goConfig = getGoConfig();
+	if (!goConfig['useLanguageServer']) {
+		return;
+	}
+
 	const usingSourceGraph = getToolFromToolPath(getLanguageServerToolPath()) === 'go-langserver';
 	if (usingSourceGraph && goVersion.gt('1.10')) {
 		const promptMsg =
@@ -477,7 +487,6 @@ export async function offerToInstallTools() {
 		if (selected === installLabel) {
 			await installTools([getTool('gopls')], goVersion);
 		} else if (selected === disableLabel) {
-			const goConfig = getGoConfig();
 			const inspectLanguageServerSetting = goConfig.inspect('useLanguageServer');
 			if (inspectLanguageServerSetting.globalValue === true) {
 				goConfig.update('useLanguageServer', false, vscode.ConfigurationTarget.Global);

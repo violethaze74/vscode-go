@@ -31,6 +31,7 @@ import {
 import { DebugProtocol } from 'vscode-debugprotocol';
 import { parseEnvFiles } from '../utils/envUtils';
 import {
+	correctBinname,
 	envPath,
 	expandFilePathInOutput,
 	fixDriveCasingInWindows,
@@ -482,8 +483,7 @@ export class Delve {
 					if (mode === 'debug') {
 						this.noDebug = true;
 						const build = ['build'];
-
-						const output = path.join(os.tmpdir(), 'out');
+						const output = path.join(os.tmpdir(), correctBinname('out'));
 						build.push(`-o=${output}`);
 
 						const buildOptions: { [key: string]: any } = { cwd: dirname, env };
@@ -586,6 +586,9 @@ export class Delve {
 				}
 
 				const currentGOWorkspace = getCurrentGoWorkspaceFromGOPATH(env['GOPATH'], dirname);
+				if (!launchArgs.packagePathToGoModPathMap) {
+					launchArgs.packagePathToGoModPathMap = {};
+				}
 				dlvArgs.push(mode || 'debug');
 				if (mode === 'exec' || (mode === 'debug' && !isProgramDirectory)) {
 					dlvArgs.push(program);
